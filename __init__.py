@@ -143,6 +143,7 @@ def combine_array(parent_dict,ids,array):
     '''
     Assuming array of [NxM] for N objects and M properties
     Linearly add M properties for connected objects through parent_dict, output of merge_tuples_unionfind
+    This version is deprecated because it's just wrong
     '''
     newarray = array.copy()
     # prepare mask and idsindex dict
