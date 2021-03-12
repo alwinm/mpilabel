@@ -1,11 +1,13 @@
 import numpy as n
 import scipy.ndimage as sn
 
+# Utilities for scipy.ndimage.label with MPI 
+
 # scipy ndimage label on a chunk
 # identify boundary points
 # associate boundary points with connected components within chunk
 # unionfind merge connected components across chunks 
-
+# add together linear properties (anything that is a sum over voxels is eligible)
 
 def remap(indices,offset,shape0,shape1):
     # unravel_index gets i,j,k coords within array of shape0
@@ -38,14 +40,20 @@ def link_boundary(array,structure=None):
     Finds contiguous regions of the boundary and associates with the relevant connected component
     '''
     label,num = sn.label(array,structure=structure)
+    # values = array.reshape(-1)
     if not num:
         return n.zeros([0,2],dtype=n.int64)
+        
+    # since a[0] is the value of array, and array was the labelled array, a[0] links to original label 
     slc = sn.labeled_comprehension(array,label,range(1,num+1),
                                    lambda a,b: n.array([n.min(b),a[0]]),
                                    list,
                                    None,
                                    pass_positions=True)
     slc = n.stack(slc)
+    # 1st column is the minimum index 
+    # 2nd column is the corresponding labelled array label
+
     return n.array(slc).reshape(-1,2)
 
 def process(mask,offset,globalshape,structure=None):
@@ -54,6 +62,7 @@ def process(mask,offset,globalshape,structure=None):
         return n.min(remap(indices,offset,mask.shape,globalshape))
 
     label,num_clouds = sn.label(mask,structure=structure)
+    # if num_clouds == 0:
     if not num_clouds:
         slc = []
         ids = n.array([])
@@ -69,7 +78,7 @@ def process(mask,offset,globalshape,structure=None):
 
     boundary_list = boundaries(label,offset,globalshape,structure=structure)
     boundary_list[:,1] = ids[boundary_list[:,1]-1]
-
+    # by this step, both columns of boundary_list have been corrected to global indices
     return slc,ids,boundary_list
 
 # Boundary correction
@@ -121,36 +130,56 @@ def merge_tuples_unionfind(tuples):
 
     return parent_dict
 
-def numpy_get_indices(
+def get_indices(x,y):
+    # when x is not sorted
+    # find indices of y inside x 
+    ax = n.array(x)
+    sx = n.argsort(ax)
+    result = sx[n.searchsorted(x,y,sorter=sx)]
+    assert n.all(ax[result] == y)
+    return result
 
 def combine_array(parent_dict,ids,array):
     '''
     Assuming array of [NxM] for N objects and M properties
     Linearly add M properties for connected objects through parent_dict, output of merge_tuples_unionfind
     '''
-    ids = list(ids)
     newarray = array.copy()
     # prepare mask and idsindex dict
     mask = n.ones(len(ids),dtype=bool)
-    idsindex = {}
 
     # only compute on objects with parents which are also in ids 
-    object_ids = set(parent_dict.keys()).intersection(set(ids))
+    object_ids = n.array(list(set(parent_dict.keys()).intersection(set(ids))))
 
+    # numpy compute indices and identities of objects and their parents
+    idsindex = get_indices(ids,object_ids)
+    pids = n.array([parent_dict[i] for i in object_ids])
+    pidsindex = get_indices(ids,pids)
+    mask[idsindex] = (pidsindex == idsindex)
 
+    # for anything that isn't its own parent, add it to the parent
+    for i in n.arange(len(object_ids))[pidsindex != idsindex]:
+        newarray[pidsindex[i]] += newarray[idsindex[i]]
 
-    for object_id in object_ids:
-        index = ids.index(object_id)
-        idsindex[object_id] = index
-
-    for object_id in object_ids:
-        index = idsindex[object_id]
-        # sets are sorted so index of parent should already be found previously in loop
-        if parent_dict[object_id] != object_id:
-            mask[index] = False
-            parent_index = idsindex[parent_dict[object_id]]
-            newarray[parent_index] += newarray[index]
-    return newarray[mask]
+    return newarray[mask],ids[mask]
 
             
+
+def combine_array2(parent_dict,ids,array):
+    # 3x faster and correct
+
+    # new id for each line of array data
+    new_ids = [parent_dict[x] if x in parent_dict else x for x in ids]
+    # sorted list 
+    uni = n.unique(new_ids)
+    # new indices for bincount
+    suni = n.searchsorted(uni,new_ids)
+    # assert n.all([n.all(suni[new_ids == uni[i]] == i) for i in range(len(uni))]) 
+    # basically, suni = i whenever new_ids = uni[i] so suni is reduced indices
+    new_array = n.zeros([len(uni),len(array[0])])
+    for i in range(len(array[0])):
+        weight = array[:,i].astype(float)
+        new_array[:,i] = n.bincount(suni,weights=weight)
+    return new_array,uni
+
 
