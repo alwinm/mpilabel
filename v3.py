@@ -1,5 +1,7 @@
 import numpy
 import scipy.ndimage
+import time
+time.t0 = time.time()
 
 default_structure = scipy.ndimage.generate_binary_structure(3,3)
 
@@ -22,9 +24,18 @@ identify 1 point per boundary connected component (to reduce data)
 each boundary point exists in multiple domains, as member of subsections of a single connected component
 union-find merge connected components across chunks
 
-add together linear properties (anything that is a sum over voxels is eligible) to 
-output and save a single number per connected component
+add together linear properties (anything that is a sum over voxels is eligible) to save single number per connected component
+
+
+
 '''
+
+def timer(string):
+    t1 = time.time()
+    dt = t1-time.t0
+    print(dt, string)
+    time.t0 = t1
+    return dt
 
 def remap(indices,offset,local_shape,global_shape):
     '''
@@ -40,17 +51,14 @@ def remap(indices,offset,local_shape,global_shape):
 
 def boundaries(array,offset,global_shape,structure=default_structure):
     '''
-    For each 2-D boundary face, produce tuples 
-    which represent connections between objects and min remapped index of object on face.
-    The same face will appear in two local domains 
-    with the same min remapped indices for objects but different object identifiers.
+    For each 2-D boundary face, produce tuples which represent connections between objects and min remapped index of object on face.
+    The same face will appear in two local domains with the same min remapped indices for objects but different object identifiers.
     So these pairs (links) will enable object identifiers connected across domains to be connected.
     '''
     result = numpy.zeros([0,2],dtype=numpy.int64)
     for axis in range(array.ndim):
         for side in [0,array.shape[axis]-1]:
-            # extract boundary layer on each side of axis
-            # as a 3-D subarray with its own offset position within the global array
+            # extract boundary layer on axis,side as a 3-D subarray with its own offset position within the global array
             select = [slice(None)]*array.ndim
             newaxis = [slice(None)]*array.ndim
             select[axis] = side
@@ -77,14 +85,9 @@ def link_boundary(array,structure=default_structure):
     if not num_features:
         return numpy.zeros([0,2],dtype=numpy.int64)
 
-    def make_link(labeled_array,linear_indices):
-        return numpy.array([numpy.min(linear_indices),labeled_array[0]])
-    
     # note: min commutes with remap: min(remap(indices)) = remap(min(indices)) so can remap later
-
-    # for each label, make link between label and minimum index
     slc = scipy.ndimage.labeled_comprehension(array,label,range(1,num_features+1),
-                                              make_link,
+                                              lambda labeled_array,linear_indices: numpy.array([numpy.min(linear_indices),labeled_array[0]]),
                                               list,
                                               None,
                                               pass_positions=True)
@@ -100,7 +103,7 @@ def process(mask,offset,global_shape,structure=default_structure):
     structure : scipy ndimage binary structure
 
     Returns
-    slc : Numpy object array of connected components which are integer arrays of flattened local domain indices
+    slc : Numpy object array of integer arrays, each integer array is flattened local domain indices of a connected component
     ids : array of connected component ids from perspective of global domain
     boundary_list : N x 2 array representing N pairs for connecting components across domains
     '''
@@ -253,6 +256,7 @@ def example(size):
     mask = numpy.random.randint(0,2,size=global_shape)
     values = numpy.random.random(size=global_shape)
 
+    timer('init')
     # First calculate with domain decomposition
     blocks = [(i,j,k) for i in range(2) for j in range(2) for k in range(2)]
 
@@ -282,6 +286,8 @@ def example(size):
     parent_dict = merge_tuples_unionfind(total_boundary_list)
     block_array,block_ids = combine_array(parent_dict,total_ids_array.reshape(-1),total_sum_array)
 
+    timer('block')
+    
     # Next calculate as a whole
     label,num_clouds = scipy.ndimage.label(mask,structure=default_structure)
     global_slc = scipy.ndimage.labeled_comprehension(mask,label,range(1,num_clouds+1),
@@ -293,13 +299,14 @@ def example(size):
     global_array = numpy.array([numpy.sum(global_flat_values[feature]) for feature in global_slc])
     global_array = global_array.reshape(-1,1)
 
+    timer('global')
+    
     # Floating point addition is not associative or commutative so the two arrays can only be close
     assert numpy.all(numpy.isclose(block_array,global_array))
 
     # The block method gives objects in order of their minimum flattened cell index since the union-find step
     # always takes the minimum to be the parent
-    # if scipy.ndimage.label is implemented in the same way (which it is),
-    # the arrays should match since the order of objects should match
+    # if scipy.ndimage.label is implemented in the same way, the arrays should match since the order of objects should match
     # otherwise, need to compare their sorted form
 
     return block_array,global_array
