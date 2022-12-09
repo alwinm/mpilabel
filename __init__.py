@@ -79,6 +79,7 @@ def process(mask,offset,globalshape,structure=None):
     boundary_list = boundaries(label,offset,globalshape,structure=structure)
     boundary_list[:,1] = ids[boundary_list[:,1]-1]
     # by this step, both columns of boundary_list have been corrected to global indices
+    # and ids have been corrected to global indices
     return slc,ids,boundary_list
 
 # Boundary correction
